@@ -183,10 +183,21 @@ type Indexable interface {
 	Len() int
 }
 
+// TODO explain
+type IndexAliasable interface {
+	Indexable
+	IndexAlias(i int) Value // requires 0 <= i < Len()
+}
+
 // A Sliceable is a sequence that can be cut into pieces with the slice operator (x[i:j:step]).
 //
 // All native indexable objects are sliceable.
-// This is a separate interface for backwards-compatibility.
+//
+// This is a separate interface from Indexable for backwards-compatibility.
+// Although it is possible to implement the selection of the elements
+// x[i:j:step] in a generic way using only the Indexable interface,
+// the creation of the result value (string, tuple, list, etc)
+// varies by type.
 type Sliceable interface {
 	Indexable
 	// For positive strides (step > 0), 0 <= start <= end <= n.
@@ -275,6 +286,17 @@ const (
 	Right Side = true
 )
 
+// A HasUnary value may be used as either operand of these unary operators:
+//     +   -   *   &
+//
+// An implementation may decline to handle an operation by returning (nil, nil).
+// For this reason, clients should always call the standalone Unary(op, x)
+// function rather than calling the method directly.
+type HasUnary interface {
+	Value
+	Unary(op syntax.Token) (Value, error)
+}
+
 // A HasAttrs value has fields or methods that may be read by a dot expression (y = x.f).
 // Attribute names may be listed using the built-in 'dir' function.
 //
@@ -285,6 +307,15 @@ type HasAttrs interface {
 	Value
 	Attr(name string) (Value, error) // returns (nil, nil) if attribute not present
 	AttrNames() []string             // callers must not modify the result.
+}
+
+// HasAttrAlias is a variant of HasAttr for integrating with Go, where addressing modes are significant.
+type HasAttrAlias interface {
+	HasAttrs
+	// AttrAlias computes y = x.f where y is destined to be used on
+	// the left side of an assignment, such as x.f.c = 1.
+	// TODO clarify.
+	AttrAlias(name string) (Value, error) // returns (nil, nil) if attribute not present
 }
 
 var (

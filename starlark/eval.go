@@ -138,7 +138,9 @@ func (fr *Frame) Position() syntax.Position {
 	case *Function:
 		// Starlark function
 		return c.funcode.Position(fr.callpc) // position of active call
-	case interface{ Position() syntax.Position }:
+	case interface {
+		Position() syntax.Position
+	}:
 		// If a built-in Callable defines
 		// a Position method, use it.
 		return c.Position()
@@ -398,8 +400,15 @@ func listExtend(x *List, y Iterable) {
 }
 
 // getAttr implements x.dot.
-func getAttr(fr *Frame, x Value, name string) (Value, error) {
+func getAttr(fr *Frame, x Value, name string, alias bool) (Value, error) {
 	// field or method?
+	if alias {
+		if x, ok := x.(HasAttrAlias); ok {
+			if v, err := x.AttrAlias(name); v != nil || err != nil {
+				return v, err
+			}
+		}
+	}
 	if x, ok := x.(HasAttrs); ok {
 		if v, err := x.Attr(name); v != nil || err != nil {
 			return v, err
@@ -419,7 +428,7 @@ func setField(fr *Frame, x Value, name string, y Value) error {
 }
 
 // getIndex implements x[y].
-func getIndex(fr *Frame, x, y Value) (Value, error) {
+func getIndex(fr *Frame, x, y Value, alias bool) (Value, error) {
 	switch x := x.(type) {
 	case Mapping: // dict
 		z, found, err := x.Get(y)
@@ -443,6 +452,11 @@ func getIndex(fr *Frame, x, y Value) (Value, error) {
 		if i < 0 || i >= n {
 			return nil, fmt.Errorf("%s index %d out of range [0:%d]",
 				x.Type(), i, n)
+		}
+		if alias {
+			if x, ok := x.(IndexAliasable); ok {
+				return x.IndexAlias(i), nil
+			}
 		}
 		return x.Index(i), nil
 	}
@@ -498,6 +512,14 @@ func Unary(op syntax.Token, x Value) (Value, error) {
 	case syntax.NOT:
 		return !x.Truth(), nil
 	}
+
+	if x, ok := x.(HasUnary); ok {
+		y, err := x.Unary(op)
+		if y != nil || err != nil {
+			return y, err
+		}
+	}
+
 	return nil, fmt.Errorf("unknown unary op: %s %s", op, x.Type())
 }
 

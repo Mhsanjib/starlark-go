@@ -154,10 +154,12 @@ loop:
 			stack[sp] = z
 			sp++
 
-		case compile.UPLUS, compile.UMINUS, compile.TILDE:
+		case compile.UPLUS, compile.UMINUS, compile.TILDE, compile.UAMP:
 			var unop syntax.Token
 			if op == compile.TILDE {
 				unop = syntax.TILDE
+			} else if op == compile.UAMP {
+				unop = syntax.AMP
 			} else {
 				unop = syntax.Token(op-compile.UPLUS) + syntax.PLUS
 			}
@@ -339,11 +341,11 @@ loop:
 				break loop
 			}
 
-		case compile.INDEX:
+		case compile.INDEX, compile.INDEX_L:
 			y := stack[sp-1]
 			x := stack[sp-2]
 			sp -= 2
-			z, err2 := getIndex(fr, x, y)
+			z, err2 := getIndex(fr, x, y, op == compile.INDEX_L)
 			if err2 != nil {
 				err = err2
 				break loop
@@ -351,10 +353,10 @@ loop:
 			stack[sp] = z
 			sp++
 
-		case compile.ATTR:
+		case compile.ATTR, compile.ATTR_L:
 			x := stack[sp-1]
 			name := f.Prog.Names[arg]
-			y, err2 := getAttr(fr, x, name)
+			y, err2 := getAttr(fr, x, name, op == compile.ATTR_L)
 			if err2 != nil {
 				err = err2
 				break loop

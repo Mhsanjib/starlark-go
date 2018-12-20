@@ -34,10 +34,12 @@ import (
 	"go.starlark.net/syntax"
 )
 
+// TODO: don't emit INDEX_L / ATTR_L unless resolve.AllowAddressable
+
 const debug = false // TODO(adonovan): use a bitmap of options; and regexp to match files
 
 // Increment this to force recompilation of saved bytecode files.
-const Version = 5
+const Version = 6
 
 type Opcode uint8
 
@@ -84,6 +86,7 @@ const (
 	UPLUS  // x UPLUS x
 	UMINUS // x UMINUS -x
 	TILDE  // x TILDE ~x
+	UAMP   // x AMP &x      (fails if x did not preserve l-mode)
 
 	NONE  // - NONE None
 	TRUE  // - TRUE True
@@ -94,7 +97,8 @@ const (
 	NOT         //          value NOT bool
 	RETURN      //          value RETURN -
 	SETINDEX    //        a i new SETINDEX -
-	INDEX       //            a i INDEX elem
+	INDEX       //            a i INDEX elem        elem = a[i]
+	INDEX_L     //            a i INDEX_L elem      elem = a[i] (elem may be an alias or a copy of a[i])
 	SETDICT     // dict key value SETDICT -
 	SETDICTUNIQ // dict key value SETDICTUNIQ -
 	APPEND      //      list elem APPEND -
@@ -123,6 +127,7 @@ const (
 	PREDECLARED //                - PREDECLARED<name>   value
 	UNIVERSAL   //                - UNIVERSAL<name>     value
 	ATTR        //                x ATTR<name>          y           y = x.name
+	ATTR_L      //                x ATTR_L<name>        y           y = x.name (y may be an alias or a copy of x.name)
 	SETFIELD    //              x y SETFIELD<name>      -           x.name = y
 	UNPACK      //         iterable UNPACK<n>           vn ... v1
 
@@ -198,6 +203,7 @@ var opcodeNames = [...]string{
 	STAR:        "star",
 	TILDE:       "tilde",
 	TRUE:        "true",
+	UAMP:        "uamp",
 	UMINUS:      "uminus",
 	UNIVERSAL:   "universal",
 	UNPACK:      "unpack",
@@ -266,8 +272,11 @@ var stackEffect = [...]int8{
 	SLICE:       -3,
 	STAR:        -1,
 	TRUE:        +1,
+	UAMP:        0,
+	UMINUS:      0,
 	UNIVERSAL:   +1,
 	UNPACK:      variableStackEffect,
+	UPLUS:       0,
 }
 
 func (op Opcode) String() string {
@@ -998,14 +1007,14 @@ func (fcomp *fcomp) stmt(stmt syntax.Stmt) {
 			switch lhs := unparen(stmt.LHS).(type) {
 			case *syntax.Ident:
 				// x = ...
-				fcomp.lookup(lhs)
+				fcomp.lookup(lhs) // no way to compile this in l-mode
 				set = func() {
 					fcomp.set(lhs)
 				}
 
 			case *syntax.IndexExpr:
 				// x[y] = ...
-				fcomp.expr(lhs.X)
+				fcomp.addr(lhs.X) // compile in l-mode
 				fcomp.expr(lhs.Y)
 				fcomp.emit(DUP2)
 				fcomp.setPos(lhs.Lbrack)
@@ -1017,7 +1026,7 @@ func (fcomp *fcomp) stmt(stmt syntax.Stmt) {
 
 			case *syntax.DotExpr:
 				// x.f = ...
-				fcomp.expr(lhs.X)
+				fcomp.addr(lhs.X) // compile in l-mode
 				fcomp.emit(DUP)
 				name := fcomp.pcomp.nameIndex(lhs.Name.Name)
 				fcomp.setPos(lhs.Dot)
@@ -1141,7 +1150,7 @@ func (fcomp *fcomp) assign(pos syntax.Position, lhs syntax.Expr) {
 
 	case *syntax.IndexExpr:
 		// x[y] = rhs
-		fcomp.expr(lhs.X)
+		fcomp.addr(lhs.X)
 		fcomp.emit(EXCH)
 		fcomp.expr(lhs.Y)
 		fcomp.emit(EXCH)
@@ -1150,7 +1159,7 @@ func (fcomp *fcomp) assign(pos syntax.Position, lhs syntax.Expr) {
 
 	case *syntax.DotExpr:
 		// x.f = rhs
-		fcomp.expr(lhs.X)
+		fcomp.addr(lhs.X)
 		fcomp.emit(EXCH)
 		fcomp.setPos(lhs.Dot)
 		fcomp.emit1(SETFIELD, fcomp.pcomp.nameIndex(lhs.Name.Name))
@@ -1165,6 +1174,27 @@ func (fcomp *fcomp) assignSequence(pos syntax.Position, lhs []syntax.Expr) {
 	fcomp.emit1(UNPACK, uint32(len(lhs)))
 	for i := range lhs {
 		fcomp.assign(pos, lhs[i])
+	}
+}
+
+func (fcomp *fcomp) addr(e syntax.Expr) {
+	switch e := e.(type) {
+	case *syntax.ParenExpr:
+		fcomp.addr(e.X)
+
+	case *syntax.DotExpr:
+		fcomp.addr(e.X)
+		fcomp.setPos(e.Dot)
+		fcomp.emit1(ATTR_L, fcomp.pcomp.nameIndex(e.Name.Name))
+
+	case *syntax.IndexExpr:
+		fcomp.addr(e.X)
+		fcomp.expr(e.Y)
+		fcomp.setPos(e.Lbrack)
+		fcomp.emit(INDEX_L)
+
+	default:
+		fcomp.expr(e)
 	}
 }
 
@@ -1253,9 +1283,15 @@ func (fcomp *fcomp) expr(e syntax.Expr) {
 		}
 
 	case *syntax.UnaryExpr:
-		fcomp.expr(e.X)
+		if e.Op == syntax.AMP {
+			fcomp.addr(e.X) // l-mode
+		} else {
+			fcomp.expr(e.X)
+		}
 		fcomp.setPos(e.OpPos)
 		switch e.Op {
+		case syntax.AMP:
+			fcomp.emit(UAMP)
 		case syntax.MINUS:
 			fcomp.emit(UMINUS)
 		case syntax.PLUS:

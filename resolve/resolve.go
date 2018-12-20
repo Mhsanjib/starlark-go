@@ -96,6 +96,7 @@ var (
 	AllowGlobalReassign = false // allow reassignment to globals declared in same file (deprecated)
 	AllowBitwise        = false // allow bitwise operations (&, |, ^, ~, <<, and >>)
 	AllowRecursion      = false // allow while statements and recursive functions
+	AllowAddressable    = false // allow &a.f, &a[i], and compile a.f[i].g = ... in lvalue mode
 )
 
 // File resolves the specified file.
@@ -646,6 +647,9 @@ func (r *resolver) expr(e syntax.Expr) {
 	case *syntax.UnaryExpr:
 		if !AllowBitwise && e.Op == syntax.TILDE {
 			r.errorf(e.OpPos, doesnt+"support bitwise operations")
+		}
+		if !AllowAddressable && e.Op == syntax.AMP {
+			r.errorf(e.OpPos, doesnt+"support address operations")
 		}
 		r.expr(e.X)
 
